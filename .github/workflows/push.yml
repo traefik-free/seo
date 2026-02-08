@@ -1,0 +1,39 @@
+name: Push
+
+on:
+  push:
+    branches:
+      - main
+      
+jobs:
+  tag:
+    runs-on: seo
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Get latest tag and increment
+        id: version
+        run: |
+          LATEST=$(git tag -l 'v*' | sort -V | tail -n1)
+          if [ -z "$LATEST" ]; then
+            echo "tag=v0.0.1" >> $GITHUB_OUTPUT
+            echo "No existing tags, starting with v0.0.1"
+          else
+            MAJOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f1)
+            MINOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f2)
+            PATCH=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f3)
+            NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+            echo "tag=$NEW_TAG" >> $GITHUB_OUTPUT
+            echo "Incremented $LATEST -> $NEW_TAG"
+          fi
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.version.outputs.tag }}
+          git push origin ${{ steps.version.outputs.tag }}
