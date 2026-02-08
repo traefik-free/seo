@@ -1,17 +1,19 @@
 # Traefik SEO Plugin
-![Traefik SEO Plugin](.assets/icon.png)
+![Traefik SEO Plugin](https://github.com/traefik-free/seo/raw/main/.assets/icon.png)
 This plugin is a middleware for [Traefik](https://traefik.io/), designed to dynamically generate sitemap.xml and robots.txt files based on the paths served by your application. It automatically collects successful (HTTP 200) routes that are not ignored and includes them in the sitemap. This helps improve SEO by providing search engines with an up-to-date site map and robots instructions.
 
 ## Features
 - Dynamic Sitemap Generation: Collects URLs from successful requests (HTTP 200) and generates an XML sitemap on-the-fly when requested.
 - Robots.txt Support: Generates a simple robots.txt file that references the sitemap URL and allows all user agents.
 - Configurable Paths: Customize the paths for sitemap (/sitemap.xml by default) and robots (/robots.txt by default).
-- Ignore Patterns: Exclude specific paths using regular expressions. Includes default ignores for common non-SEO files (e.g., images, scripts, backups, etc.).
+- Ignore Patterns: Exclude specific paths using regular expressions. Includes comprehensive default ignores for VCS, config files, CMS/admin paths, API endpoints, build artifacts, and common non-SEO file extensions.
 - Host-Aware Filtering: Only includes URLs matching the current host in the sitemap.
 - Priorities and Lastmod: Assigns priorities (1.0 for root, 0.8 for others) and uses the current UTC time for lastmod.
 - Thread-Safe: Uses mutex locking for concurrent access to the path map.
-- Gzip Handling: Properly handles gzipped responses when injecting Google Tag Manager scripts, ensuring content integrity.
+- Gzip Handling: Properly handles gzipped responses when injecting scripts and SEO links, ensuring content integrity.
 - Google Tag Manager Integration: Optionally injects GTM script and noscript tags into HTML responses for analytics tracking.
+- **Multilingual SEO (hreflang)**: Automatically injects canonical and alternate link tags for locale pages (`/ru/`, `/en/`, `/mobile/ru/`, `/mobile/en/`). Supports configurable default language and supported languages for x-default and hreflang alternates.
+- **Mobile Alternate**: Injects `rel="alternate" media="only screen and (max-width: 640px)"` for desktop pages, pointing to the corresponding mobile version.
 
 ## Installation
 This plugin is written in Go and can be integrated as a Traefik middleware plugin. To use it:
@@ -35,12 +37,20 @@ The plugin accepts a JSON configuration with the following options:
 - robotsPath (string, optional): Path where robots.txt is served. Default: /robots.txt.
 - ignore (array of strings, optional): List of regex patterns to ignore when collecting paths for the sitemap. These are compiled as Go regular expressions.
 - gtmID (string, optional): Google Tag Manager container ID (e.g., "GTM-XXXXXX"). If provided, the plugin will automatically inject the GTM script into the <head> and noscript iframe into the <body> of HTML responses. This enables easy analytics tracking without modifying your application code.
+- defaultLang (string, optional): Default language for x-default hreflang (e.g., "en"). Used for pages with locale paths (/ru/, /en/, /mobile/ru/, /mobile/en/). Default: "en".
+- supportedLangs (array of strings, optional): List of supported language codes for hreflang alternates (e.g., ["ru", "en"]). Default: ["ru", "en"].
+
+> **Note:** SEO links (canonical, hreflang, mobile alternate) are injected only for HTML pages with locale paths: `/ru/`, `/en/`, `/mobile/ru/`, or `/mobile/en/`. Other path formats are not modified.
 
 ### Default Ignore Patterns
-The plugin includes built-in ignore patterns to exclude non-SEO-relevant files and paths:
-- Case-insensitive: .env, .bak, .old, .example, .exmaple, .sample, .tmpl, .tpl, .dist, .~, .php, .aspx, config, wp-, sitemap, undefined.
-- Paths starting with /_next/*.
-- File extensions: .jpg, .jpeg, .png, .gif, .webp, .svg, .bmp, .tif, .tiff, .ico, .txt, .php, .exe, .css, .js, .json, .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx, .mp3, .mp4, .avi, .mov, .zip, .rar, .tar, .gz, .env, .html, .xml.
+The plugin includes comprehensive built-in ignore patterns to exclude non-SEO-relevant files and paths:
+- **Config & backup**: .env, .bak, .old, .example, .sample, .tmpl, .tpl, .dist, config, wp-, sitemap, undefined.
+- **VCS & sensitive**: .git, .svn, .hg, .bzr, .htaccess, .htpasswd, .well-known, .aws, .ssh, .mysql_history, .pgpass, .netrc.
+- **CMS & admin**: wp-admin, wp-login, wp-content, wp-includes, administrator, phpmyadmin, phpinfo, server-status, actuator, jmx, jolokia, heapdump.
+- **Dev & build**: node_modules, vendor, .idea, .vscode, .next, .nuxt, target, dist, build, __pycache__, .pytest_cache.
+- **API & docs**: api/v[0-9]+/, graphql, swagger, openapi, api-docs, health, metrics, status.
+- **Config files**: Dockerfile, docker-compose, package.json, composer.json, Gemfile, pom.xml, web.config, etc.
+- **File extensions**: images (jpg, png, gif, webp, svg, etc.), documents (pdf, doc, docx), media (mp3, mp4, avi), fonts (ttf, woff), code (js, css, json, xml), archives (zip, tar, gz), executables, and more.
 
 You can add custom ignores via the configuration.
 
@@ -55,6 +65,8 @@ http:
           sitemapPath: "/sitemap.xml"
           robotsPath: "/robots.txt"
           gtmID: "GTM-0000000"  # Your Google Tag Manager ID
+          defaultLang: "en"     # Default language for x-default hreflang
+          supportedLangs: ["ru", "en"]  # Languages for hreflang alternates
           ignore:
             - "^/admin/.*" # Custom ignore for admin paths
             - ".*\\.log$" # Ignore log files
@@ -78,12 +90,18 @@ http:
 
 4. Path Collection: Only paths that return HTTP 200 and do not match ignore patterns are added. The root path (/) is always included if not present.
 5. GTM Integration: If gtmID is set, HTML responses (text/html, status 200) will have the GTM script added before </head> and noscript after <body>. Gzipped responses are decompressed, modified, and re-gzipped automatically.
+6. **Multilingual SEO links**: For pages with locale paths (`/ru/`, `/en/`, `/mobile/ru/`, `/mobile/en/`), the plugin automatically injects:
+   - `rel="canonical"` — always points to the desktop URL (mobile pages canonicalize to `/ru/...` or `/en/...`).
+   - `rel="alternate" hreflang="ru"` and `hreflang="en"` — language alternates for each supported language.
+   - `rel="alternate" hreflang="x-default"` — points to the default language homepage (desktop only).
+   - `rel="alternate" media="only screen and (max-width: 640px)"` — mobile version URL (desktop pages only).
 
 ## How It Works
 - Request Handling: The middleware wraps the next handler. For non-special paths, it records successful requests.
 - Sitemap Build: When /sitemap.xml is requested, it locks the path map, filters by host, sorts, and generates XML.
 - Robots Build: When /robots.txt is requested, it generates a simple text file with the sitemap reference.
 - Scheme Detection: Uses X-Forwarded-Proto or falls back to the request scheme for full URLs.
+- **SEO Links Injection**: For locale pages, injects canonical and hreflang alternate links before `</head>`, plus mobile alternate for desktop pages.
 - GTM Injection: If gtmID is configured, injects GTM scripts into HTML responses, handling gzipped content by decompressing, modifying, and re-compressing if necessary.
 
 ## Limitations

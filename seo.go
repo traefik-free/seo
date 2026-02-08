@@ -30,11 +30,17 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 <!-- End Google Tag Manager (noscript) -->`
 )
 
+var (
+	localePrefixRe = regexp.MustCompile(`^/(mobile/)?(ru|en)(/|$)`)
+)
+
 type Config struct {
-	SitemapPath string   `json:"sitemapPath,omitempty"`
-	RobotsPath  string   `json:"robotsPath,omitempty"`
-	Ignore      []string `json:"ignore,omitempty"`
-	GTMID       string   `json:"gtmID,omitempty"`
+	SitemapPath   string   `json:"sitemapPath,omitempty"`
+	RobotsPath    string   `json:"robotsPath,omitempty"`
+	Ignore        []string `json:"ignore,omitempty"`
+	GTMID         string   `json:"gtmID,omitempty"`
+	DefaultLang   string   `json:"defaultLang,omitempty"`   // for x-default, e.g. "en"
+	SupportedLangs []string `json:"supportedLangs,omitempty"` // e.g. ["ru", "en"]
 }
 
 func CreateConfig() *Config {
@@ -85,14 +91,16 @@ func (w *modifyingWriter) WriteHeader(code int) {
 }
 
 type sitemapGenerator struct {
-	next        http.Handler
-	name        string
-	sitemapPath string
-	robotsPath  string
-	ignores     []*regexp.Regexp
-	paths       map[string]struct{}
-	gtmID       string
-	mu          sync.Mutex
+	next          http.Handler
+	name          string
+	sitemapPath   string
+	robotsPath    string
+	ignores       []*regexp.Regexp
+	paths         map[string]struct{}
+	gtmID         string
+	defaultLang   string
+	supportedLangs []string
+	mu            sync.Mutex
 }
 
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
@@ -113,6 +121,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	}
 
 	defaultPatterns := []string{
+		// Config, env, backup
 		`(?i)\.env`,
 		`(?i)\.bak`,
 		`(?i)\.old`,
@@ -123,28 +132,124 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		`(?i)\.tpl`,
 		`(?i)\.dist`,
 		`(?i)\.~`,
-		`(?i)\.php`,
-		`(?i)\.aspx`,
 		`(?i)config`,
 		`(?i)wp-`,
 		`(?i)sitemap`,
 		`(?i)undefined`,
-		`^/_next/*`,
-		`\.(jpg|jpeg|png|gif|webp|svg|bmp|tif|tiff|ico|txt|php|exe|css|js|json|pdf|doc|docx|xls|xlsx|ppt|pptx|mp3|mp4|avi|mov|zip|rar|tar|gz|env|html|xml)$`,
+		`^/_next/`,
+		// Защита от сканирования: VCS, служебные каталоги
+		`(?i)/\.git/`,
+		`(?i)/\.git$`,
+		`(?i)/\.svn/`,
+		`(?i)/\.hg/`,
+		`(?i)/\.bzr/`,
+		`(?i)/\.env\b`,
+		`(?i)/\.htaccess`,
+		`(?i)/\.htpasswd`,
+		`(?i)/\.well-known/`,
+		`(?i)/wp-admin`,
+		`(?i)/wp-login`,
+		`(?i)/wp-content/`,
+		`(?i)/wp-includes/`,
+		`(?i)/administrator`,
+		`(?i)/phpmyadmin`,
+		`(?i)/phpinfo`,
+		`(?i)/server-status`,
+		`(?i)/server-info`,
+		`(?i)/actuator`,
+		`(?i)/jmx`,
+		`(?i)/jolokia`,
+		`(?i)/heapdump`,
+		`(?i)/threaddump`,
+		`(?i)/trace\.axd`,
+		`(?i)/elmah\.axd`,
+		`(?i)/node_modules/`,
+		`(?i)/vendor/`,
+		`(?i)/\.idea/`,
+		`(?i)/\.vscode/`,
+		`(?i)/cgi-bin/`,
+		`(?i)/\.aws/`,
+		`(?i)/\.ssh/`,
+		`(?i)/\.docker/`,
+		`(?i)/debug`,
+		`(?i)/\.DS_Store`,
+		`(?i)/crossdomain\.xml`,
+		`(?i)/web\.config`,
+		`(?i)/Dockerfile`,
+		`(?i)/docker-compose`,
+		`(?i)/Vagrantfile`,
+		`(?i)/composer\.(json|lock)`,
+		`(?i)/package(-lock)?\.json`,
+		`(?i)/Gemfile`,
+		`(?i)/pom\.xml`,
+		`(?i)/build\.(gradle|xml)`,
+		`(?i)/\.terraform/`,
+		`(?i)/\.vagrant/`,
+		`(?i)/\.travis\.yml`,
+		`(?i)/\.github/`,
+		`(?i)/\.gitlab`,
+		`(?i)/Jenkinsfile`,
+		`(?i)/Procfile`,
+		`(?i)/\.bash_history`,
+		`(?i)/\.mysql_history`,
+		`(?i)/\.pgpass`,
+		`(?i)/\.netrc`,
+		`(?i)/\.my\.cnf`,
+		`(?i)/api/v[0-9]+/`,
+		`(?i)/graphql`,
+		`(?i)/swagger`,
+		`(?i)/openapi`,
+		`(?i)/api-docs`,
+		`(?i)/health`,
+		`(?i)/metrics`,
+		`(?i)/status`,
+		`(?i)/__pycache__/`,
+		`(?i)/\.pytest_cache/`,
+		`(?i)/\.mypy_cache/`,
+		`(?i)/\.cache/`,
+		`(?i)/\.next/`,
+		`(?i)/\.nuxt/`,
+		`(?i)/\.output/`,
+		`(?i)/target/`,
+		`(?i)/dist/`,
+		`(?i)/build/`,
+		// Расширения файлов
+		`(?i)\.(jpg|jpeg|jpe|png|gif|webp|svg|svgz|bmp|tif|tiff|ico|icns|heic|heif|avif|raw|cr2|nef|arw|dng|psd|ai|eps|orf|rw2|sr2|x3f)$`,
+		`(?i)\.(html|htm|shtml|xhtml|css|scss|sass|less|js|mjs|cjs|ts|tsx|jsx|map|json|xml|xaml|yaml|yml|csv|tsv)$`,
+		`(?i)\.(pdf|doc|docx|xls|xlsx|ppt|pptx|odt|ods|odp|docm|xlsm|pptm|rtf|tex|bib|pages|numbers|keynote)$`,
+		`(?i)\.(zip|rar|7z|tar|gz|gzip|bz2|bzip2|xz|lz|lzma|lzo|z|sz|br|zst|lz4)$`,
+		`(?i)\.(mp3|mp4|m4a|wav|wma|ogg|oga|opus|flac|aac|webm|mkv|avi|mov|wmv|flv|mpg|mpeg|m4v|3gp|3g2|ts|mts|m2ts|aiff|au|mid|midi|ra|rm|rmvb)$`,
+		`(?i)\.(ttf|otf|woff|woff2|eot)$`,
+		`(?i)\.(csv|db|sqlite|sqlite3|dat|dbf|accdb|mdb)$`,
+		`(?i)\.(env|ini|conf|config|cfg|properties|log|tmp|temp)$`,
+		`(?i)\.(php|php3|php4|php5|phtml|asp|aspx|aspx|jsp|jspx|cgi|py|pyc|pyo|rb|jar|war|class)$`,
+		`(?i)\.(exe|dll|so|dylib|a|bin|sh|bash|bat|cmd|ps1|msi|deb|rpm|apk|app|dmg|pkg|run)$`,
+		`(?i)\.(swf|wasm|data|sql|dump|bak|backup|old|orig|save|swp|tmp|temp|lock)$`,
 	}
 	for _, pattern := range defaultPatterns {
 		re := regexp.MustCompile(pattern)
 		ignores = append(ignores, re)
 	}
 
+	defaultLang := "en"
+	if config.DefaultLang != "" {
+		defaultLang = config.DefaultLang
+	}
+	supportedLangs := []string{"ru", "en"}
+	if len(config.SupportedLangs) > 0 {
+		supportedLangs = config.SupportedLangs
+	}
+
 	sg := &sitemapGenerator{
-		next:        next,
-		name:        name,
-		sitemapPath: config.SitemapPath,
-		robotsPath:  config.RobotsPath,
-		ignores:     ignores,
-		paths:       make(map[string]struct{}),
-		gtmID:       config.GTMID,
+		next:           next,
+		name:           name,
+		sitemapPath:    config.SitemapPath,
+		robotsPath:     config.RobotsPath,
+		ignores:        ignores,
+		paths:          make(map[string]struct{}),
+		gtmID:          config.GTMID,
+		defaultLang:    defaultLang,
+		supportedLangs: supportedLangs,
 	}
 
 	return sg, nil
@@ -223,17 +328,25 @@ func (sg *sitemapGenerator) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 
 	bodyStr := string(bodyBytes)
 
-	if sg.gtmID != "" && strings.HasPrefix(strings.ToLower(contentType), "text/html") && mw.status == http.StatusOK {
-		gtmScript := fmt.Sprintf(gtmScriptTemplate, sg.gtmID)
-		gtmNoscript := fmt.Sprintf(gtmNoscriptTemplate, sg.gtmID)
+	if strings.HasPrefix(strings.ToLower(contentType), "text/html") && mw.status == http.StatusOK {
+		modified := bodyStr
 
-		modified := strings.Replace(bodyStr, "</head>", gtmScript+"</head>", 1)
+		// Inject canonical and alternate links for locale pages (/ru/, /en/, /mobile/ru/, /mobile/en/)
+		if seoLinks := sg.buildSEOLinks(req); seoLinks != "" {
+			modified = strings.Replace(modified, "</head>", seoLinks+"</head>", 1)
+		}
 
-		re := regexp.MustCompile(`(?i)<body\b[^>]*>`)
-		match := re.FindStringIndex(modified)
-		if match != nil {
-			insertPos := match[1]
-			modified = modified[:insertPos] + gtmNoscript + modified[insertPos:]
+		// Inject GTM
+		if sg.gtmID != "" {
+			gtmScript := fmt.Sprintf(gtmScriptTemplate, sg.gtmID)
+			gtmNoscript := fmt.Sprintf(gtmNoscriptTemplate, sg.gtmID)
+			modified = strings.Replace(modified, "</head>", gtmScript+"</head>", 1)
+			re := regexp.MustCompile(`(?i)<body\b[^>]*>`)
+			match := re.FindStringIndex(modified)
+			if match != nil {
+				insertPos := match[1]
+				modified = modified[:insertPos] + gtmNoscript + modified[insertPos:]
+			}
 		}
 
 		bodyBytes = []byte(modified)
@@ -349,4 +462,77 @@ func (sg *sitemapGenerator) buildRobotsTxt(req *http.Request) string {
 	sitemapURL := scheme + "://" + host + sg.sitemapPath
 
 	return fmt.Sprintf("User-agent: *\nSitemap: %s\n", sitemapURL)
+}
+
+// buildSEOLinks returns canonical and alternate link tags for pages with /ru/ or /en/ locale
+func (sg *sitemapGenerator) buildSEOLinks(req *http.Request) string {
+	path := req.URL.Path
+	match := localePrefixRe.FindStringSubmatch(path)
+	if match == nil {
+		return ""
+	}
+
+	mobilePrefix := match[1] // "mobile/" or ""
+	currentLang := match[2] // "ru" or "en"
+	isMobile := mobilePrefix != ""
+
+	scheme := req.Header.Get("X-Forwarded-Proto")
+	if scheme == "" {
+		scheme = req.URL.Scheme
+	}
+	if scheme == "" {
+		scheme = "https"
+	}
+	host := req.Host
+	baseURL := scheme + "://" + host
+
+	// Desktop path (strip /mobile/ for canonical on mobile pages)
+	desktopPath := path
+	if isMobile {
+		desktopPath = "/" + strings.TrimPrefix(path, "/mobile/")
+	}
+
+	// Canonical: always desktop URL
+	canonicalPath := strings.TrimSuffix(desktopPath, "/")
+	if canonicalPath == "" {
+		canonicalPath = "/"
+	}
+	canonicalURL := baseURL + canonicalPath
+
+	var links []string
+	links = append(links, fmt.Sprintf(`<link rel="canonical" href="%s" />`, canonicalURL))
+
+	// Hreflang alternates for each supported language
+	for _, lang := range sg.supportedLangs {
+		var altPath string
+		if isMobile {
+			altPath = "/mobile/" + lang + strings.TrimPrefix(desktopPath, "/"+currentLang)
+		} else {
+			altPath = "/" + lang + strings.TrimPrefix(desktopPath, "/"+currentLang)
+		}
+		altPath = strings.TrimSuffix(altPath, "/")
+		if altPath == "" {
+			altPath = "/"
+		}
+		altURL := baseURL + altPath
+		links = append(links, fmt.Sprintf(`<link rel="alternate" hreflang="%s" href="%s" />`, lang, altURL))
+	}
+
+	// x-default: homepage in default language (desktop only)
+	if !isMobile {
+		defaultHome := baseURL + "/" + sg.defaultLang + "/"
+		links = append(links, fmt.Sprintf(`<link rel="alternate" hreflang="x-default" href="%s" />`, defaultHome))
+	}
+
+	// Mobile alternate with media query (desktop pages only)
+	if !isMobile {
+		mobileURL := baseURL + "/mobile" + desktopPath
+		mobileURL = strings.TrimSuffix(mobileURL, "/")
+		if mobileURL == baseURL+"/mobile" {
+			mobileURL = baseURL + "/mobile/" + currentLang + "/"
+		}
+		links = append(links, fmt.Sprintf(`<link rel="alternate" media="only screen and (max-width: 640px)" href="%s" />`, mobileURL))
+	}
+
+	return strings.Join(links, "")
 }
